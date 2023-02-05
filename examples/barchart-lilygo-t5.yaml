@@ -11,11 +11,9 @@ substitutions:
   ota_secret: "notsosecret"
   
 external_components:
-  - source:
-      type: local
-      path: my_components
+  - source: github://NicolaiPetri/esphome_components@main
     components: 
-      - "barchart"
+    - barchart
   - source: github://kasdk3/esphome@lilygo-t5-47
     components:
     - lilygo_t5_47
