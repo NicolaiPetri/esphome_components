@@ -1,0 +1,208 @@
+# Example yaml for ESPHome using BarChart component with a lilygo T5 4.7" e-ink display
+
+substitutions:
+  esp_name: LilyGo BarChart Example #Device Name
+  esp_hostname: barchart-example 
+  run_time: 1min #can be as long as needed to get data 
+  sleep_time: 2min # normal sleep time
+  night_sleep_time: 1h # 1st sleep time after midnight
+  wifi_ssid: "ssid"
+  wifi_secret: "password"
+  ota_secret: "notsosecret"
+  
+external_components:
+  - source:
+      type: local
+      path: my_components
+    components: 
+      - "barchart"
+  - source: github://kasdk3/esphome@lilygo-t5-47
+    components:
+    - lilygo_t5_47
+
+barchart:
+  - id: chart_example
+    name_font: font_small
+    duration: 24h
+    x_grid: 3h
+    y_grid: 500
+    min_value: 0
+    max_value: 2000
+    width: 450
+    height: 320
+    series:
+    - name: dummy1
+      text_sensor: example_text_sensor
+
+esphome:
+  name: ${esp_hostname}
+  platform: ESP32
+  board: esp32dev
+
+wifi:
+  ssid: ${wifi_ssid}
+  password: ${wifi_secret}
+
+deep_sleep:
+  run_duration: ${run_time} 
+  sleep_duration: ${sleep_time}
+  id: deep_sleep_1
+  esp32_ext1_wakeup:
+    pins: GPIO39
+    mode: ALL_LOW
+
+web_server:
+  port: 80
+  include_internal: true 
+
+ota:
+  password: ${ota_secret}
+
+# Enable debug logging while testing
+logger:
+  level: DEBUG
+
+# Enable Home Assistant API
+api:
+  password: ""
+
+time:
+  - platform: homeassistant
+    id: ntp
+
+spi:
+  clk_pin: 18
+  mosi_pin: 23
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 28    
+
+button:
+  - platform: restart
+    name: "${esp_name} Restart"
+
+  - platform: template
+    name: "${esp_name} Refresh"
+    icon: "mdi:update"
+    on_press:
+      then:
+      - component.update: t5_display
+
+binary_sensor:
+  - platform: gpio
+    pin: 
+      number: GPIO39
+      inverted: true
+    name: "${esp_name} Button 1"
+    on_press:
+      then:
+       - component.update: t5_display
+      
+  - platform: gpio
+    pin: 
+      number: GPIO34
+      inverted: true
+    name: "${esp_name} Button 2"
+
+  - platform: gpio
+    pin: 
+      number: GPIO35
+      inverted: true
+    name: "${esp_name} Button 3"
+
+sensor:
+  - platform: adc
+    pin: GPIO36
+    name: "${esp_name} Battery Voltage"
+    id: batt_volt
+    attenuation: 11db
+    update_interval: never
+    filters:
+      - multiply: 2
+
+  - platform: template
+    name: "${esp_name} Battery"
+    id: batt
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    device_class: battery
+    lambda: |-
+      int y = (1-(4.1-id(batt_volt).state)/(4.1-3.3))*100;
+      if (y < 100) {return y;} else {return 100;};
+    update_interval: never
+
+text_sensor:
+  - platform: template
+    id: example_text_sensor
+    name: "Template Text Sensor - Example values seperate by ','"
+    # Seperate by ',' .. newest values first .. 
+    lambda: |-
+      return {"1.0,2.0,4.0,8.0,16.0,8,2,9,16,0,3"};
+    update_interval: 60s
+    internal: true
+
+  - platform: homeassistant
+    entity_id: sensor.idfromha
+    id: example_text_sensor_ha
+    internal: true
+
+  - platform: homeassistant
+    entity_id: alarm_control_panel.garage_2
+    id: alarmo_garage
+    internal: true
+    on_value: # Actions to perform once data for the last sensor has been received
+      then:
+        - script.execute: all_data_received     
+
+
+script:
+  - id: all_data_received
+    then:
+      - component.update: batt_volt
+      - component.update: batt
+      - component.update: t5_display
+      - script.execute: enter_sleep     
+
+  - id: enter_sleep
+    then:
+      - if:
+          condition:
+            lambda: |- 
+              auto time = id(ntp).now();
+              if (!time.is_valid()) { 
+                return false;
+              }
+              return (time.hour < 6); 
+          then:
+            - logger.log: "It's nighttime, entering long sleep for ${night_sleep_time}"          
+            - deep_sleep.enter: 
+                id: deep_sleep_1 
+                sleep_duration: ${night_sleep_time}
+          else:
+            - logger.log: "It's daytime, entering short sleep for ${sleep_time}"             
+            - deep_sleep.enter: 
+                id: deep_sleep_1 
+                sleep_duration: ${sleep_time}
+        
+
+display:
+#  - platform: t547
+  - platform: lilygo_t5_47
+    id: t5_display
+    rotation: 270
+#    update_interval: never
+    update_interval: 30s
+    lambda: |-
+      auto white = Color(255, 255, 255);
+      auto black = Color(0, 0, 0);
+      int y = 100;
+      uint32_t saveY = y;
+      y += 20;
+      id(chart_example).draw(&it, 20, y, white);
+      it.printf(0, saveY, id(font_small), TextAlign::BASELINE_LEFT, "Some title");
+      it.printf(250, saveY, id(font_small), TextAlign::BASELINE_LEFT, "min=%.2f, max=%.2f", id(chart_example).get_calculated_min(), id(chart_example).get_calculated_max());
+      y += 130;
+      y += 20; 
+
